@@ -35,9 +35,63 @@ nnn_cd () {
     printf "%s" "${context:-0}c$dir" > "$NNN_PIPE"
 }
 
+## Return success (0) if command $1 is available, failure otherwise.
+## Usage: if cmd_exists fzf; then ...
 cmd_exists () {
     type "$1" > /dev/null 2>&1
-    echo $?
+}
+
+## Print an error message (if any) to stderr, wait for a keypress and exit 1.
+## Used to surface a fatal error before nnn repaints the screen.
+nnn_fail () {
+    [ -n "$1" ] && printf "%s\n" "$1" 1>&2
+    read -r _
+    exit 1
+}
+
+## Abort with a standard message unless command $1 is available.
+## Optional $2 overrides the default "<cmd> not found" message.
+nnn_require () {
+    cmd_exists "$1" || nnn_fail "${2:-$1 not found}"
+}
+
+## Resolve $1 to an absolute path based on $PWD and print it.
+## Absolute paths are printed unchanged.
+nnn_abspath () {
+    case "$1" in
+        /*) printf "%s\n" "$1" ;;
+        *)
+            abspath__=${1#./}
+            if [ "$PWD" = "/" ]; then
+                printf "/%s\n" "$abspath__"
+            else
+                printf "%s/%s\n" "$PWD" "$abspath__"
+            fi ;;
+    esac
+}
+
+## Ask nnn to clear its selection (no-op if the pipe is unavailable).
+nnn_clear_selection () {
+    [ -p "$NNN_PIPE" ] && printf '%s' '-' > "$NNN_PIPE"
+}
+
+## Create a temporary file and store its path in the variable named by $1.
+## Every file created this way is removed when the plugin exits or is
+## interrupted. Call it directly (not in a subshell): nnn_mktemp tmpfile
+nnn_mktemp () {
+    [ -n "$1" ] || return 1
+    mktmp__=$(mktemp "${TMPDIR:-/tmp}/.nnnXXXXXX") || return 1
+    NNN_TMPFILES="${NNN_TMPFILES}${NNN_TMPFILES:+
+}${mktmp__}"
+    trap '_nnn_rmtemp' EXIT INT TERM HUP
+    eval "$1=\$mktmp__"
+}
+
+_nnn_rmtemp () {
+    [ -n "$NNN_TMPFILES" ] || return 0
+    printf "%s\n" "$NNN_TMPFILES" | while IFS= read -r rmtemp__; do
+        [ -n "$rmtemp__" ] && rm -f -- "$rmtemp__"
+    done
 }
 
 nnn_use_selection() {

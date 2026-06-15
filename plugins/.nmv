@@ -65,9 +65,9 @@ fi
 lines=$(printf "%s\n" "$arr" | wc -l)
 width=${#lines}
 
-dst_file=$(mktemp "$TMPDIR/.nnnXXXXXX")
-trap 'rm -f -- "$dst_file"' EXIT
+nnn_mktemp dst_file
 
+# shellcheck disable=SC2154
 printf "%s" "$arr" | awk '{printf("%'"${width}"'d %s\n", NR, $0)}' > "$dst_file"
 
 items=("~")

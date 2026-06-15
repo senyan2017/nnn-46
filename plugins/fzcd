@@ -28,11 +28,7 @@ IFS="$(printf '\n\r')"
 CTX=+
 LIST="${LIST:-""}"
 
-if ! type fzf >/dev/null 2>&1; then
-    printf "fzf missing"
-    read -r _
-    exit 1
-fi
+nnn_require fzf
 
 if [ -n "$1" ] && [ "$(file -b --mime-type "$1")" = 'text/plain' ] && [ -e "$(head -1 "$1")" ]; then
     LIST="$1"
@@ -45,27 +41,22 @@ elif ! [ -s "$LIST" ]; then
 fi
 
 if [ -n "$LIST" ]; then
-    if type find >/dev/null 2>&1; then
-        tmpfile=$(mktemp /tmp/abc-script.XXXXXX)
+    nnn_require find
 
-        while IFS= read -r path; do
-            if [ -d "$path" ]; then
-                printf "%s\n" "$path" >> "$tmpfile"
-            elif [ -f "$path" ]; then
-                printf "%s\n" "$(dirname "$path")" >> "$tmpfile"
-            fi
-        done < "$LIST"
+    nnn_mktemp tmpfile
 
-        sel=$(xargs -d '\n' < "$tmpfile" -I{} find {} -type f -printf "%H//%P\n" | sed '/.*\/\/\(\..*\|.*\/\..*\)/d; s:/\+:/:g' | fzf --delimiter / --tiebreak=begin --info=hidden)
-        # Alternative for 'fd'
-        # sel=$(xargs -d '\n' < "$tmpfile" fd . | fzf --delimiter / --tiebreak=begin --info=hidden)
+    while IFS= read -r path; do
+        if [ -d "$path" ]; then
+            # shellcheck disable=SC2154
+            printf "%s\n" "$path" >> "$tmpfile"
+        elif [ -f "$path" ]; then
+            printf "%s\n" "$(dirname "$path")" >> "$tmpfile"
+        fi
+    done < "$LIST"
 
-        rm -- "$tmpfile"
-    else
-        printf "find missing"
-        read -r _
-            exit 1
-    fi
+    sel=$(xargs -d '\n' < "$tmpfile" -I{} find {} -type f -printf "%H//%P\n" | sed '/.*\/\/\(\..*\|.*\/\..*\)/d; s:/\+:/:g' | fzf --delimiter / --tiebreak=begin --info=hidden)
+    # Alternative for 'fd'
+    # sel=$(xargs -d '\n' < "$tmpfile" fd . | fzf --delimiter / --tiebreak=begin --info=hidden)
 fi
 
 if [ -n "$sel" ]; then
@@ -73,17 +64,5 @@ if [ -n "$sel" ]; then
         exit 0
     fi
 
-    # Check if the selected path returned by fzf command is absolute
-    case $sel in
-    /*) nnn_cd "$sel" "$CTX" ;;
-    *)
-        # Remove "./" prefix if it exists
-        sel="${sel#./}"
-
-        if [ "$PWD" = "/" ]; then
-            nnn_cd "/$sel" "$CTX"
-        else
-            nnn_cd "$PWD/$sel" "$CTX"
-        fi;;
-    esac
+    nnn_cd "$(nnn_abspath "$sel")" "$CTX"
 fi

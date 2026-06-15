@@ -267,6 +267,18 @@ The `opcode` indicates the operation type.
 
 For convenience, we provided a helper script named `.nnn-plugin-helper` and a function named `nnn_cd` to ease this process. `nnn_cd` receives the path to change to as the first argument, and the context as an optional second argument.
 If a context is not provided, it is asked for explicitly. To skip this and choose the current context, set the `CUR_CTX` variable in `.nnn-plugin-helper` (or in the specific plugin after sourcing `.nnn-plugin-helper`) to 1.
+The helper also exposes utility functions that plugins should reuse instead of re-implementing the same logic:
+
+| Function | Purpose |
+|:--- | --- |
+| `cmd_exists <cmd>` | Return success if `<cmd>` is available, e.g. `if cmd_exists fzf; then`. |
+| `nnn_require <cmd> [msg]` | Show a message and exit if `<cmd>` is missing. |
+| `nnn_fail [msg]` | Print `msg` to stderr, wait for a keypress and exit `1`. |
+| `nnn_abspath <path>` | Print `<path>` resolved against `$PWD` to an absolute path. |
+| `nnn_mktemp <var>` | Store a fresh temp file path in `<var>`; created files are auto-removed on exit. |
+| `nnn_clear_selection` | Ask `nnn` to clear its selection (no-op without the pipe). |
+| `nnn_use_selection [label]` | Return success if the selection should be used over the current file. |
+
 Usage examples can be found in the Examples section below.
 
 #### Get notified on file hover

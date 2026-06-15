@@ -56,9 +56,18 @@ if [ -n "$LIST" ]; then
             fi
         done < "$LIST"
 
-        sel=$(xargs -d '\n' < "$tmpfile" -I{} find {} -type f -printf "%H//%P\n" | sed '/.*\/\/\(\..*\|.*\/\..*\)/d; s:/\+:/:g' | fzf --delimiter / --tiebreak=begin --info=hidden)
+        # Portable replacement for `xargs -d '\n' ... find -printf "%H//%P\n"`
+        # (GNU-only). Emit "<searchroot>//<relpath>" per file so the hidden
+        # filter below only inspects the relative part, then collapse slashes.
+        # The sed program avoids GNU BRE extensions (\| and \+).
+        sel=$(while IFS= read -r dir; do
+                find "$dir" -type f 2>/dev/null | while IFS= read -r f; do
+                    rel=${f#"$dir"}
+                    printf '%s//%s\n' "$dir" "${rel#/}"
+                done
+            done < "$tmpfile" | sed -e '\,//\.,d' -e '\,//.*/\.,d' -e 's,//*,/,g' | fzf --delimiter / --tiebreak=begin --info=hidden)
         # Alternative for 'fd'
-        # sel=$(xargs -d '\n' < "$tmpfile" fd . | fzf --delimiter / --tiebreak=begin --info=hidden)
+        # sel=$(while IFS= read -r dir; do fd . "$dir"; done < "$tmpfile" | fzf --delimiter / --tiebreak=begin --info=hidden)
 
         rm -- "$tmpfile"
     else

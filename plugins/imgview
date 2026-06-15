@@ -71,7 +71,22 @@ view_files() {
     esac
 }
 
-target="$(readlink -f "$1")"
+# Portable `readlink -f`: print the canonical absolute path of "$1".
+realpath_f() {
+    if rf_target=$(readlink -f -- "$1" 2>/dev/null) && [ -n "$rf_target" ]; then
+        printf '%s\n' "$rf_target"
+    elif command -v realpath >/dev/null 2>&1; then
+        realpath -- "$1"
+    elif [ -d "$1" ]; then
+        (cd -- "$1" 2>/dev/null && pwd -P)
+    else
+        rf_dir=$(dirname -- "$1")
+        rf_dir=$(cd -- "$rf_dir" 2>/dev/null && pwd -P) || { printf '%s\n' "$1"; return; }
+        printf '%s/%s\n' "${rf_dir%/}" "$(basename -- "$1")"
+    fi
+}
+
+target="$(realpath_f "$1")"
 [ -d "$target" ] && dir="$target" || dir="${target%/*}"
 if uname | grep -q "Darwin"; then
     [ -f "$1" ] && open "$1" >/dev/null 2>&1 &

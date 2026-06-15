@@ -32,7 +32,9 @@ if [ "$resp" = "j" ]; then
         done
 
         file="$(basename "$(echo "$arr" | sed -n '1p' | sed -e 's/[0-9][0-9]$//')")"
-        sort -z < "$selection" | xargs -0 -I{} cat {} > "${file}.out"
+        # `sort -z` is GNU-only; round-trip through newlines to sort portably
+        # (split parts use numeric/alpha suffixes, so they carry no newlines).
+        tr '\0' '\n' < "$selection" | sort | tr '\n' '\0' | xargs -0 -I{} cat {} > "${file}.out"
 
         # Clear selection
         if [ -p "$NNN_PIPE" ]; then
@@ -46,7 +48,15 @@ elif [ "$resp" = "s" ]; then
         read -r size
 
         if [ -n "$size" ]; then
-            split -d -b "$size"M "$1" "$1"
+            # Use a plain byte count (understood by both GNU and BSD split;
+            # the "M" suffix and -d numeric suffixes are GNU-specific). Probe
+            # for -d support with an empty input so no stray files are created.
+            bytes=$((size * 1024 * 1024))
+            if split -d -b 1 /dev/null 2>/dev/null; then
+                split -d -b "$bytes" -- "$1" "$1"
+            else
+                split -b "$bytes" -- "$1" "$1"
+            fi
         fi
     fi
 fi

@@ -306,7 +306,9 @@ nnn_cd "$(xsel -ob)"
 
 . $(dirname $0)/.nnn-plugin-helper
 
-nnn_cd "$(dirname $(readlink -fn $1))" 0
+# readlink -f is GNU-only; fall back to realpath, then to the path as-is
+target=$(readlink -f -- "$1" 2>/dev/null || realpath -- "$1" 2>/dev/null || printf '%s' "$1")
+nnn_cd "$(dirname -- "$target")" 0
 ```
 
 #### Change to arbitrary directory without helper script

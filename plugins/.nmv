@@ -55,11 +55,14 @@ else
 
 	if [ -z "$NNN_LIST" ]; then
 		findcmd="$findcmd -print"
+		arr=$(eval "$findcmd" | sort)
 	else
-		findcmd="$findcmd -printf "'"'"$NNN_LIST/%P\n"'"'
+		# BSD/macOS find has no -printf; use -print and rewrite the
+		# leading "./" to "$NNN_LIST/". awk substr avoids regex and '&'
+		# surprises if the path contains metacharacters.
+		findcmd="$findcmd -print"
+		arr=$(eval "$findcmd" | awk -v p="$NNN_LIST/" 'substr($0,1,2)=="./"{print p substr($0,3); next} {print}' | sort)
 	fi
-
-	arr=$(eval "$findcmd" | sort)
 fi
 
 lines=$(printf "%s\n" "$arr" | wc -l)

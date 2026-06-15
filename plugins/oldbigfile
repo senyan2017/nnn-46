@@ -10,7 +10,26 @@
 printf "Min file size (MB): "
 read -r size
 
-find . -size +"$size"M -type f -printf '%A+ %s %p\n' | sort
+if find . -maxdepth 0 -printf '' >/dev/null 2>&1; then
+    # GNU find: keep the original fast output (access date, size, path)
+    find . -size +"$size"M -type f -printf '%A+ %s %p\n' | sort
+else
+    # Portable fallback (BSD/macOS find has no -printf). `stat` syntax also
+    # differs, so try GNU (-c) then BSD (-f). Emit "<atime-epoch> <size> <path>"
+    # and sort ascending by access time.
+    find . -size +"$size"M -type f -exec sh -c '
+        for f do
+            if t=$(stat -c "%X" -- "$f" 2>/dev/null); then
+                s=$(stat -c "%s" -- "$f" 2>/dev/null)
+            elif t=$(stat -f "%a" -- "$f" 2>/dev/null); then
+                s=$(stat -f "%z" -- "$f" 2>/dev/null)
+            else
+                continue
+            fi
+            printf "%s %s %s\n" "$t" "$s" "$f"
+        done
+    ' sh {} + | sort -n
+fi
 
 echo "Press any key to exit"
 read -r _

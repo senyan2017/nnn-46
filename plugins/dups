@@ -17,6 +17,19 @@
 EDITOR="${EDITOR:-vi}"
 TMPDIR="${TMPDIR:-/tmp}"
 
+# This plugin relies on GNU findutils/coreutils behaviour (find -printf,
+# uniq -w/--all-repeated, GNU sed). Exit with a readable message instead of
+# a cascade of errors on platforms that lack them (macOS/BSD/BusyBox).
+if ! find . -maxdepth 0 -printf '' >/dev/null 2>&1 ||
+   ! printf 'a\n' | uniq -w1 >/dev/null 2>&1; then
+    printf "dups requires GNU find and GNU uniq (and GNU sed).\n"
+    printf "On macOS/BSD: install GNU tools (e.g. 'brew install coreutils findutils'),\n"
+    printf "ensure they are on PATH, then retry.\n"
+    printf "Press any key to exit"
+    read -r _
+    exit 1
+fi
+
 size_digits=12
 tmpfile=$(mktemp "$TMPDIR/.nnnXXXXXX")
 

@@ -36,7 +36,7 @@ mocp_add ()
         done
 
         mocp -o shuffle
-        echo "$arr2" | xargs -d "\n" mocp -a
+        printf '%s\n' "$arr2" | tr '\n' '\0' | xargs -0 mocp -a
     else
         if [ "$resp" = "y" ]; then
             xargs < "$selection" -0 mocp -a

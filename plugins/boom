@@ -12,8 +12,22 @@
 GUIPLAYER="${GUIPLAYER:-""}"
 NUMTRACKS="${NUMTRACKS:-100}"
 
+# Print up to $1 random input lines. Falls back to an awk shuffle when
+# neither shuf (GNU coreutils) nor gshuf (Homebrew coreutils) is available.
+randlist() {
+    if command -v shuf >/dev/null 2>&1; then
+        shuf -n "$1"
+    elif command -v gshuf >/dev/null 2>&1; then
+        gshuf -n "$1"
+    else
+        awk 'BEGIN { srand() } { a[NR] = $0 }
+             END { for (i = NR; i > 0; i--) { j = int(rand() * i) + 1;
+                       t = a[j]; a[j] = a[i]; a[i] = t; print t } }' | head -n "$1"
+    fi
+}
+
 if [ -n "$GUIPLAYER" ]; then
-    find . -type f \( -iname "*.mp3" -o -iname "*.flac" -o -iname "*.m4a" -o -iname "*.webm" -o -iname "*.wma" \) | shuf -n "$NUMTRACKS" | xargs -d "\n" "$GUIPLAYER" > /dev/null 2>&1 &
+    find . -type f \( -iname "*.mp3" -o -iname "*.flac" -o -iname "*.m4a" -o -iname "*.webm" -o -iname "*.wma" \) | randlist "$NUMTRACKS" | tr '\n' '\0' | xargs -0 "$GUIPLAYER" > /dev/null 2>&1 &
 
     # detach the player
     sleep 1
@@ -30,7 +44,7 @@ elif type mocp >/dev/null 2>&1; then
         state=$(mocp -i | grep "State:" | cut -d' ' -f2)
         if [ "$state" = 'PLAY' ]; then
             # add up to 100 random audio files
-            find . -type f \( -iname "*.mp3" -o -iname "*.flac" -o -iname "*.m4a" -o -iname "*.webm" -o -iname "*.wma" \) | head -n "$NUMTRACKS" | xargs -d "\n" mocp -a
+            find . -type f \( -iname "*.mp3" -o -iname "*.flac" -o -iname "*.m4a" -o -iname "*.webm" -o -iname "*.wma" \) | head -n "$NUMTRACKS" | tr '\n' '\0' | xargs -0 mocp -a
             exit
         fi
     fi
@@ -40,7 +54,7 @@ elif type mocp >/dev/null 2>&1; then
     mocp -o shuffle
 
     # add up to 100 random audio files
-    find . -type f \( -iname "*.mp3" -o -iname "*.flac" -o -iname "*.m4a" -o -iname "*.webm" -o -iname "*.wma" \) | head -n "$NUMTRACKS" | xargs -d "\n" mocp -a
+    find . -type f \( -iname "*.mp3" -o -iname "*.flac" -o -iname "*.m4a" -o -iname "*.webm" -o -iname "*.wma" \) | head -n "$NUMTRACKS" | tr '\n' '\0' | xargs -0 mocp -a
 
     # start playing
     mocp -p

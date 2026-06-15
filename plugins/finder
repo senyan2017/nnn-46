@@ -19,6 +19,15 @@ TMPDIR="${TMPDIR:-/tmp}"
 NNN_FINDHIST="${NNN_FINDHIST:-${XDG_CONFIG_HOME:-$HOME/.config}/nnn/finderbms}"
 NNN_FINDHISTLEN="${NNN_FINDHISTLEN:-10000}"
 
+# Portable `tac` (GNU coreutils): macOS/BSD ship `tail -r` instead.
+tac_compat() {
+    if command -v tac >/dev/null 2>&1; then
+        tac "$@"
+    else
+        tail -r "$@"
+    fi
+}
+
 printexamples() {
     printf -- "-maxdepth 1 -name pattern
 -maxdepth 1 -size +100M
@@ -67,7 +76,7 @@ mapfile -t fexprs < <(sort "$NNN_FINDHIST" | uniq -c | sort -nr | head -n5 |\
 printf "Most used search expressions:\n"
 printexprs 0
 
-mapfile -t -O"$i" fexprs < <(tac "$NNN_FINDHIST" | awk '!a[$0]++' | head -n5)
+mapfile -t -O"$i" fexprs < <(tac_compat "$NNN_FINDHIST" | awk '!a[$0]++' | head -n5)
 printf "Most recently used search expressions:\n"
 printexprs "$i"
 read -r -p "Search expression or index (h for help): " fexpr

@@ -6,7 +6,7 @@
 #              or entering the remote name. Also works when hovering
 #              the mountpoint directly like vanilla `u`.
 #
-# Dependencies: fusermount
+# Dependencies: fusermount, mountpoint (Linux/FUSE)
 #
 # Shell: POSIX compliant
 # Authors: Kabouik & 0xACE
@@ -17,11 +17,43 @@
 
 err=0
 m=$HOME/.config/nnn/mounts
+
+# This plugin relies on Linux/FUSE userspace tools. Fail with a readable
+# message instead of a cascade of "command not found" errors elsewhere.
+if ! command -v fusermount >/dev/null 2>&1 || ! command -v mountpoint >/dev/null 2>&1; then
+    clear
+    printf "umounttree needs 'fusermount' and 'mountpoint' (Linux/FUSE), not found here.\n"
+    printf "Press return to continue. "
+    read -r _
+    exit 1
+fi
+
+# Portable `readlink -f`: print the canonical absolute path of "$1".
+realpath_f() {
+    if rf_target=$(readlink -f -- "$1" 2>/dev/null) && [ -n "$rf_target" ]; then
+        printf '%s\n' "$rf_target"
+    elif command -v realpath >/dev/null 2>&1; then
+        realpath -- "$1"
+    elif [ -d "$1" ]; then
+        (cd -- "$1" 2>/dev/null && pwd -P)
+    else
+        rf_dir=$(dirname -- "$1")
+        rf_dir=$(cd -- "$rf_dir" 2>/dev/null && pwd -P) || return 1
+        printf '%s/%s\n' "${rf_dir%/}" "$(basename -- "$1")"
+    fi
+}
+
 if [ "$PWD" = "$m" ]; then
     # Allow running the script on hovered directory if user is in ~/.config/nnn/mounts
     d="$1"
 else
-    d=$(dirname "$(readlink -f "$1")" | grep -oP "^$m\K.*" | cut -d"/" -f2)
+    # Resolve "$1", take its parent, then extract the first path component
+    # below the mounts dir. Uses parameter expansion instead of `grep -oP \K`.
+    p=$(dirname -- "$(realpath_f "$1")")
+    case "$p" in
+        "$m"/*) rest=${p#"$m"/}; d=${rest%%/*} ;;
+        *)      d="" ;;
+    esac
 fi
 
 # Test if user is within $m or a subdir, abort if not
@@ -37,7 +69,7 @@ else
         if [ "$err" -eq "0" ]; then
             rmdir "$m/$d" && clear && printf "Parent '%s' unmounted." "$d"
         else
-            clear && printf "Failed to unmount. Try lazy unmount? [Yy/Nn] " && read -r
+            clear && printf "Failed to unmount. Try lazy unmount? [Yy/Nn] " && read -r REPLY
         fi
     fi
 fi

@@ -23,9 +23,9 @@ USE_NUKE=0
 # shellcheck disable=SC1090,SC1091
 . "$(dirname "$0")"/.nnn-plugin-helper
 
-if type fzf >/dev/null 2>&1; then
+if cmd_exists fzf; then
     cmd="$FZF_DEFAULT_COMMAND"
-    if type fd >/dev/null 2>&1; then
+    if cmd_exists fd; then
         [ -z "$cmd" ] && cmd="fd -t f 2>/dev/null"
     else
         [ -z "$cmd" ] && cmd="find . -type f 2>/dev/null"
@@ -33,7 +33,7 @@ if type fzf >/dev/null 2>&1; then
     entry="$(eval "$cmd" | fzf -m)"
     # To show only the file name
     # entry=$(find . -type f 2>/dev/null | fzf --delimiter / --with-nth=-1 --tiebreak=begin --info=hidden)
-elif type sk >/dev/null 2>&1; then
+elif cmd_exists sk; then
 	entry=$(find . -type f 2>/dev/null | sk)
 else
     exit 1
@@ -53,7 +53,7 @@ if [ "$3" ]; then
         fi
 
         # Tell `nnn` to clear its internal selection
-        printf "%s" "0p" > "$NNN_PIPE"
+        nnn_clear_selection
     fi
 
     exit 0

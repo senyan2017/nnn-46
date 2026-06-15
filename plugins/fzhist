@@ -10,7 +10,10 @@
 # Shell: POSIX compliant
 # Author: Arun Prakash Jana
 
-if type fzf >/dev/null 2>&1; then
+# shellcheck disable=SC1090,SC1091
+. "$(dirname "$0")"/.nnn-plugin-helper
+
+if cmd_exists fzf; then
     fuzzy=fzf
 else
     exit 1
@@ -38,7 +41,7 @@ elif [ "$shellname" = "fish" ]; then
 fi
 
 if [ -n "$entry" ]; then
-    tmpfile=$(mktemp)
+    tmpfile=$(nnn_mktemp fzhist)
     echo "$entry" >> "$tmpfile"
     $EDITOR "$tmpfile"
 

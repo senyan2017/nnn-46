@@ -11,17 +11,18 @@
 # Shell: POSIX compliant
 # Authors: Arun Prakash Jana, ath3
 
-selection=${NNN_SEL:-${XDG_CONFIG_HOME:-$HOME/.config}/nnn/.selection}
+# shellcheck disable=SC1090,SC1091
+. "$(dirname "$0")"/.nnn-plugin-helper
 
-if type nvim >/dev/null 2>&1; then
+if cmd_exists nvim; then
     diffcmd="nvim -d"
 else
     diffcmd="vimdiff +0"
 fi
 
 dirdiff() {
-    dir1=$(mktemp "${TMPDIR:-/tmp}"/nnn-"$(basename "$1")".XXXXXXXX)
-    dir2=$(mktemp "${TMPDIR:-/tmp}"/nnn-"$(basename "$2")".XXXXXXXX)
+    dir1=$(nnn_mktemp nnn-"$(basename "$1")")
+    dir2=$(nnn_mktemp nnn-"$(basename "$2")")
     ls -A1 "$1" > "$dir1"
     ls -A1 "$2" > "$dir2"
     $diffcmd "$dir1" "$dir2"
@@ -57,6 +58,4 @@ if [ -s "$selection" ]; then
 fi
 
 # Clear selection
-if [ -p "$NNN_PIPE" ]; then
-    printf "-" > "$NNN_PIPE"
-fi
+nnn_clear_selection

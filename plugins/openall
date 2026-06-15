@@ -10,14 +10,16 @@
 # Shell: bash
 # Author: Arun Prakash Jana
 
-sel=${NNN_SEL:-${XDG_CONFIG_HOME:-$HOME/.config}/nnn/.selection}
+# shellcheck disable=SC1090,SC1091
+. "$(dirname "$0")"/.nnn-plugin-helper
+
 OPENER="${XDG_CONFIG_HOME:-$HOME/.config}/nnn/plugins/nuke"
 
-if [ -s "$sel" ]; then
+if [ -s "$selection" ]; then
     targets=()
     while IFS= read -r -d '' entry || [ -n "$entry" ]; do
         targets+=( "$entry" )
-    done < "$sel"
+    done < "$selection"
 
     elements=${#targets[@]}
 
@@ -41,9 +43,7 @@ if [ -s "$sel" ]; then
     fi
 
     # Clear selection
-    if [ -s "$sel" ] && [ -p "$NNN_PIPE" ]; then
-        printf "-" > "$NNN_PIPE"
-    fi
+    nnn_clear_selection
 elif [ -n "$1" ]; then
     "$OPENER" "$1"
 fi

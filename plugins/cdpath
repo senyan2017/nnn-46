@@ -36,19 +36,17 @@ get_dirs() {
     done
 }
 
-abort() {
-    echo "$1"
-    read -r _
-    exit 1
-}
-
 if [ -z "$CDPATH" ]; then
     CDPATH="${XDG_CONFIG_HOME:-$HOME/.config}/nnn/bookmarks"
-    [ -d "$CDPATH" ] || abort "CDPATH is not set and there is no \"$CDPATH\" directory"
+    [ -d "$CDPATH" ] || nnn_abort "CDPATH is not set and there is no \"$CDPATH\" directory"
 fi
 
 dir_list=$(get_dirs)
-[ -n "$dir_list" ] || abort "There are no directories to choose from. Check your \"$CDPATH\"."
+[ -n "$dir_list" ] || nnn_abort "There are no directories to choose from. Check your \"$CDPATH\"."
+
+if ! cmd_exists fzf; then
+    nnn_abort "fzf missing"
+fi
 
 dir=$(echo "$dir_list" | fzf --nth=1 --delimiter=':' | awk -F: 'END { print $2 }')
 if [ -n "$dir" ]; then

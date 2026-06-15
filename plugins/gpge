@@ -39,7 +39,7 @@ else
 	printf "%s" "$files" | xargs -n1 gpg --encrypt --recipient "$recipient"
 
 	# Clear selection
-	if [ "$clear_sel" -eq 1 ] && [ -p "$NNN_PIPE" ]; then
-		printf "-" > "$NNN_PIPE"
+	if [ "$clear_sel" -eq 1 ]; then
+		nnn_clear_selection
 	fi
 fi

@@ -28,10 +28,8 @@ IFS="$(printf '\n\r')"
 CTX=+
 LIST="${LIST:-""}"
 
-if ! type fzf >/dev/null 2>&1; then
-    printf "fzf missing"
-    read -r _
-    exit 1
+if ! cmd_exists fzf; then
+    nnn_abort "fzf missing"
 fi
 
 if [ -n "$1" ] && [ "$(file -b --mime-type "$1")" = 'text/plain' ] && [ -e "$(head -1 "$1")" ]; then
@@ -45,8 +43,8 @@ elif ! [ -s "$LIST" ]; then
 fi
 
 if [ -n "$LIST" ]; then
-    if type find >/dev/null 2>&1; then
-        tmpfile=$(mktemp /tmp/abc-script.XXXXXX)
+    if cmd_exists find; then
+        tmpfile=$(nnn_mktemp fzcd)
 
         while IFS= read -r path; do
             if [ -d "$path" ]; then
@@ -62,9 +60,7 @@ if [ -n "$LIST" ]; then
 
         rm -- "$tmpfile"
     else
-        printf "find missing"
-        read -r _
-            exit 1
+        nnn_abort "find missing"
     fi
 fi
 

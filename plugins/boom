@@ -12,8 +12,20 @@
 GUIPLAYER="${GUIPLAYER:-""}"
 NUMTRACKS="${NUMTRACKS:-100}"
 
+# Portable shuffle: sort -R works on GNU coreutils; fallback to awk-based shuffle
+# on macOS/BSD where sort -R is unavailable.
+shuffle_input() {
+    if sort -R </dev/null >/dev/null 2>&1; then
+        sort -R | head -n "$NUMTRACKS"
+    else
+        awk 'BEGIN{srand()}{print rand() "\t" $0}' | sort -n | cut -f2- | head -n "$NUMTRACKS"
+    fi
+}
+
 if [ -n "$GUIPLAYER" ]; then
-    find . -type f \( -iname "*.mp3" -o -iname "*.flac" -o -iname "*.m4a" -o -iname "*.webm" -o -iname "*.wma" \) | shuf -n "$NUMTRACKS" | xargs -d "\n" "$GUIPLAYER" > /dev/null 2>&1 &
+    find . -type f \( -iname "*.mp3" -o -iname "*.flac" -o -iname "*.m4a" -o -iname "*.webm" -o -iname "*.wma" \) | shuffle_input | while IFS= read -r _file; do
+        "$GUIPLAYER" "$_file" > /dev/null 2>&1 &
+    done
 
     # detach the player
     sleep 1
@@ -30,7 +42,9 @@ elif type mocp >/dev/null 2>&1; then
         state=$(mocp -i | grep "State:" | cut -d' ' -f2)
         if [ "$state" = 'PLAY' ]; then
             # add up to 100 random audio files
-            find . -type f \( -iname "*.mp3" -o -iname "*.flac" -o -iname "*.m4a" -o -iname "*.webm" -o -iname "*.wma" \) | head -n "$NUMTRACKS" | xargs -d "\n" mocp -a
+            find . -type f \( -iname "*.mp3" -o -iname "*.flac" -o -iname "*.m4a" -o -iname "*.webm" -o -iname "*.wma" \) | head -n "$NUMTRACKS" | while IFS= read -r _file; do
+                mocp -a "$_file"
+            done
             exit
         fi
     fi
@@ -40,7 +54,9 @@ elif type mocp >/dev/null 2>&1; then
     mocp -o shuffle
 
     # add up to 100 random audio files
-    find . -type f \( -iname "*.mp3" -o -iname "*.flac" -o -iname "*.m4a" -o -iname "*.webm" -o -iname "*.wma" \) | head -n "$NUMTRACKS" | xargs -d "\n" mocp -a
+    find . -type f \( -iname "*.mp3" -o -iname "*.flac" -o -iname "*.m4a" -o -iname "*.webm" -o -iname "*.wma" \) | head -n "$NUMTRACKS" | while IFS= read -r _file; do
+        mocp -a "$_file"
+    done
 
     # start playing
     mocp -p

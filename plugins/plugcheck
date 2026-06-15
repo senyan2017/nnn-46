@@ -1,0 +1,479 @@
+#!/usr/bin/env sh
+
+# Description: Pre-flight health check for nnn plugins. Inspects the plugins
+#              that are actually in use (bound in $NNN_PLUG) plus the plugins
+#              present on disk, and reports, per plugin, whether it can run on
+#              this machine. Findings are grouped into clear categories:
+#                  [ OK ]   runnable
+#                  [FAIL]   plugin file missing / not executable
+#                  [FAIL]   required external dependency missing
+#                  [WARN]   not compatible with this platform
+#                  [INFO]   optional capability not installed
+#
+#              The single source of truth for a plugin's dependencies is its
+#              own "# Dependencies:" header line -- this script parses it so the
+#              README table never has to be consulted by hand. See the
+#              "Pre-flight plugin check" section of plugins/README.md for the
+#              declaration format.
+#
+#              Designed to run unattended (CI / batch provisioning): it is fully
+#              non-interactive, honours NO_COLOR / non-tty output, and exits
+#              non-zero only on hard errors (missing plugin file, missing
+#              required dependency, or a bound plugin that cannot run on this
+#              OS). Purely informational findings (optional deps) never fail.
+#
+# Usage: plugcheck [-a] [-s] [-q] [-n] [-p DIR] [-h]
+#   -a, --all          check every plugin present on disk, not just the ones
+#                      bound in $NNN_PLUG (this is the default when NNN_PLUG is
+#                      unset/empty, e.g. on a freshly provisioned machine)
+#   -s, --strict       treat problems on present-but-unbound plugins as errors
+#                      too (optional deps still stay informational)
+#   -q, --quiet        only print problems and the summary
+#   -n, --no-color     disable ANSI colour (also auto-disabled when not a tty
+#                      or when NO_COLOR is set)
+#   -p, --plugin-dir D check plugins in directory D
+#                      (default: this script's own directory, falling back to
+#                       ${XDG_CONFIG_HOME:-$HOME/.config}/nnn/plugins)
+#   -h, --help         show this help
+#
+# Exit status: 0 = no hard errors, 1 = at least one hard error, 2 = bad usage.
+#
+# Dependencies: awk, sed, grep, mktemp
+#
+# Shell: POSIX compliant
+# Author: nnn contributors
+
+self_dir=$(cd -- "$(dirname -- "$0")" 2>/dev/null && pwd -P)
+fallback_dir="${XDG_CONFIG_HOME:-$HOME/.config}/nnn/plugins"
+
+PLUGDIR=""
+ALL=0
+STRICT=0
+QUIET=0
+NOCOLOR=0
+
+usage() {
+    sed -n '3,40p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+# ---- argument parsing -------------------------------------------------------
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -a|--all)        ALL=1 ;;
+        -s|--strict)     STRICT=1 ;;
+        -q|--quiet)      QUIET=1 ;;
+        -n|--no-color)   NOCOLOR=1 ;;
+        -p|--plugin-dir)
+            shift
+            [ -n "$1" ] || { echo "plugcheck: --plugin-dir needs an argument" >&2; exit 2; }
+            PLUGDIR=$1 ;;
+        -p=*|--plugin-dir=*) PLUGDIR=${1#*=} ;;
+        -h|--help)       usage; exit 0 ;;
+        --)              shift; break ;;
+        -*)              echo "plugcheck: unknown option '$1'" >&2; usage >&2; exit 2 ;;
+        *)               echo "plugcheck: unexpected argument '$1'" >&2; exit 2 ;;
+    esac
+    shift
+done
+
+# ---- resolve plugin directory ----------------------------------------------
+if [ -z "$PLUGDIR" ]; then
+    if [ -n "$self_dir" ] && [ -d "$self_dir" ]; then
+        PLUGDIR=$self_dir
+    else
+        PLUGDIR=$fallback_dir
+    fi
+fi
+
+if [ ! -d "$PLUGDIR" ]; then
+    echo "plugcheck: plugin directory not found: $PLUGDIR" >&2
+    exit 2
+fi
+
+# ---- platform ---------------------------------------------------------------
+uname_s=$(uname -s 2>/dev/null || echo unknown)
+case "$uname_s" in
+    Darwin)                  OS=macos ;;
+    Linux)                   OS=linux ;;
+    *BSD|DragonFly)          OS=bsd ;;
+    Haiku)                   OS=haiku ;;
+    CYGWIN*|MINGW*|MSYS*)    OS=windows ;;
+    *)                       OS=unknown ;;
+esac
+
+# ---- colour -----------------------------------------------------------------
+if [ "$NOCOLOR" -eq 1 ] || [ -n "${NO_COLOR:-}" ] || [ ! -t 1 ]; then
+    C_RED=''; C_YEL=''; C_GRN=''; C_BLU=''; C_DIM=''; C_RST=''
+else
+    C_RED=$(printf '\033[31m'); C_YEL=$(printf '\033[33m')
+    C_GRN=$(printf '\033[32m'); C_BLU=$(printf '\033[36m')
+    C_DIM=$(printf '\033[2m');  C_RST=$(printf '\033[0m')
+fi
+
+# ---- scratch space ----------------------------------------------------------
+TMPD=$(mktemp -d "${TMPDIR:-/tmp}/plugcheck.XXXXXX") || {
+    echo "plugcheck: unable to create temp dir" >&2; exit 2; }
+trap 'rm -rf "$TMPD"' EXIT INT TERM HUP
+RESULTS="$TMPD/results"
+: > "$RESULTS"
+TAB=$(printf '\t')
+
+# ---- helpers ----------------------------------------------------------------
+
+cmd_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# Resolve a single dependency candidate to "available" (0) or not (1),
+# tolerating well-known GNU-on-macOS names (gsed -> sed) and a couple of
+# logical names whose binary differs (neovim -> nvim).
+resolve_alt() {
+    _a=$1
+    cmd_exists "$_a" && return 0
+    case "$_a" in
+        neovim) cmd_exists nvim && return 0 ;;
+    esac
+    case "$_a" in
+        g?*)
+            _r=${_a#g}
+            case "$_r" in
+                sed|sort|awk|cp|mv|date|find|head|tail|ln|rm|du|tar|xargs|\
+                grep|cat|md5sum|sha256sum|stat|readlink|split|uniq|wc|tr|cut|paste)
+                    cmd_exists "$_r" && return 0 ;;
+            esac ;;
+    esac
+    return 1
+}
+
+# Does an annotation string name an OS that is NOT the current one?
+annot_foreign_os() {
+    _t=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+    case "$_t" in
+        *macos*|*osx*|*darwin*|*"mac os"*)
+            [ "$OS" = macos ] && return 1 || return 0 ;;
+        *ubuntu*|*debian*|*linux*)
+            [ "$OS" = linux ] && return 1 || return 0 ;;
+        *haiku*)  [ "$OS" = haiku ] && return 1 || return 0 ;;
+        *bsd*)    [ "$OS" = bsd ]   && return 1 || return 0 ;;
+        *windows*|*cygwin*|*msys*|*mingw*)
+            [ "$OS" = windows ] && return 1 || return 0 ;;
+    esac
+    return 1
+}
+
+# Record one finding: severity|category|plugin|detail
+record() {
+    printf '%s|%s|%s|%s\n' "$1" "$2" "$3" "$4" >> "$RESULTS"
+}
+
+# Severity for a real problem, depending on whether the plugin is in use.
+problem_sev() {
+    # $1 = bound flag
+    if [ "$1" -eq 1 ]; then echo ERR
+    elif [ "$STRICT" -eq 1 ]; then echo ERR
+    else echo WARN
+    fi
+}
+
+# Extract and normalise the dependency requirement units of a plugin file.
+# Emits, one per line:  <optional 0|1> TAB <annotation|-> TAB <alt1 alt2 ...>
+parse_deps() {
+    _file=$1
+    _deps=$(sed -n 's/^#[[:space:]]*Dependencies:[[:space:]]*//p' "$_file" 2>/dev/null | head -n1)
+    [ -n "$_deps" ] || return 0
+    printf '%s\n' "$_deps" | awk '
+        function isstop(w) {
+            return (w=="or"||w=="with"||w=="support"||w=="compiled"||\
+                    w=="audio"||w=="codec"||w=="only"||w=="for"||w=="the"||\
+                    w=="on"||w=="if"||w=="installed"||w=="custom"||w=="multi"||\
+                    w=="location"||w=="search"||w=="and"||w=="version"||\
+                    w=="optional"||w=="libmp3lame"||w=="a"||w=="an"||w=="of"||\
+                    w=="to"||w=="from"||w=="in"||w=="see"||w=="via")
+        }
+        function emit(u, opt, annot) {
+            if (u == "") return
+            print opt "\t" (annot=="" ? "-" : annot) "\t" u
+        }
+        function proc(g,   annot, opt, cmdpart, nt, toks, k, t, unit, altmode) {
+            annot = ""
+            if (match(g, /\(([^)]*)\)/))
+                annot = substr(g, RSTART+1, RLENGTH-2)
+            cmdpart = g
+            gsub(/\([^)]*\)/, "", cmdpart)   # drop parentheticals
+            gsub(/`/, "", cmdpart)           # drop backticks
+            opt = (annot ~ /optional/) ? 1 : 0
+            gsub(/\//, " / ", cmdpart)       # make / a standalone token
+            nt = split(cmdpart, toks, /[ \t]+/)
+            unit = ""; altmode = 0
+            for (k = 1; k <= nt; k++) {
+                t = toks[k]
+                if (t == "") continue
+                if (t == "/" || t == "or") { altmode = 1; continue }
+                if (isstop(t)) continue
+                if (t !~ /^[A-Za-z0-9][A-Za-z0-9._+-]*$/) continue
+                if (altmode == 1 && unit != "") { unit = unit " " t; altmode = 0 }
+                else { emit(unit, opt, annot); unit = t; altmode = 0 }
+            }
+            emit(unit, opt, annot)
+        }
+        {
+            s = $0; depth = 0; group = ""; L = length(s)
+            for (i = 1; i <= L; i++) {
+                c = substr(s, i, 1)
+                if (c == "(") depth++
+                else if (c == ")") { if (depth > 0) depth-- }
+                if (c == "," && depth == 0) { proc(group); group = "" }
+                else group = group c
+            }
+            proc(group)
+        }
+    '
+}
+
+# Run all dependency checks for one plugin file, recording findings.
+# $1 = display name, $2 = path, $3 = bound flag
+check_deps() {
+    _name=$1; _path=$2; _bound=$3
+    _units="$TMPD/units"
+    parse_deps "$_path" > "$_units"
+    if [ ! -s "$_units" ]; then
+        record OK ok "$_name" "no declared dependencies"
+        return
+    fi
+    _missing_req=0
+    _missing_plat=0
+    _missing_opt=0
+    while IFS="$TAB" read -r _opt _annot _alts; do
+        [ -n "$_alts" ] || continue
+        _ok=0
+        for _alt in $_alts; do
+            if resolve_alt "$_alt"; then _ok=1; break; fi
+        done
+        if [ "$_ok" -eq 1 ]; then
+            continue
+        fi
+        # not available
+        _pretty=$(printf '%s' "$_alts" | sed 's/ / or /g')
+        if [ "$_opt" = "1" ]; then
+            _missing_opt=1
+            record INFO optional "$_name" "optional: $_pretty"
+        elif [ "$_annot" != "-" ] && annot_foreign_os "$_annot"; then
+            _missing_plat=1
+            record "$(problem_sev "$_bound")" platform "$_name" \
+                "needs $_pretty (for $_annot, not $OS)"
+        else
+            _missing_req=1
+            record "$(problem_sev "$_bound")" dep "$_name" "missing: $_pretty"
+        fi
+    done < "$_units"
+    if [ "$_missing_req" -eq 0 ] && [ "$_missing_plat" -eq 0 ] && \
+       [ "$_missing_opt" -eq 0 ]; then
+        record OK ok "$_name" "all dependencies satisfied"
+    fi
+}
+
+# Full check for one plugin (file existence, platform, then deps).
+# $1 = display name (may contain a sub-folder), $2 = bound flag
+check_plugin() {
+    _name=$1; _bound=$2
+    _path="$PLUGDIR/$_name"
+    _base=${_name##*/}
+
+    if [ ! -e "$_path" ]; then
+        record "$(problem_sev "$_bound")" file "$_name" "plugin file not found"
+        return
+    fi
+    if [ ! -f "$_path" ]; then
+        record "$(problem_sev "$_bound")" file "$_name" "not a regular file"
+        return
+    fi
+    if [ ! -x "$_path" ]; then
+        record "$(problem_sev "$_bound")" file "$_name" "file is not executable (chmod +x)"
+        return
+    fi
+
+    # whole-plugin platform gate: "-mac" suffix or an explicit "# OS:" header
+    case "$_base" in
+        *-mac)
+            if [ "$OS" != macos ]; then
+                record "$(problem_sev "$_bound")" platform "$_name" \
+                    "macOS-only plugin (this host is $OS)"
+                return
+            fi ;;
+    esac
+    _oshdr=$(sed -n 's/^#[[:space:]]*OS:[[:space:]]*//p' "$_path" 2>/dev/null | head -n1)
+    if [ -n "$_oshdr" ] && annot_foreign_os "$_oshdr"; then
+        record "$(problem_sev "$_bound")" platform "$_name" \
+            "declares OS '$_oshdr' (this host is $OS)"
+        return
+    fi
+
+    check_deps "$_name" "$_path" "$_bound"
+}
+
+# ---- parse $NNN_PLUG into the set of bound plugins --------------------------
+# Writes bound plugin names to $TMPD/bound (one per line, deduped). Notes
+# config-level oddities (duplicate keys, command bindings, internal scripts).
+: > "$TMPD/bound"
+: > "$TMPD/seenkeys"
+bound_count=0
+if [ -n "${NNN_PLUG:-}" ]; then
+    # split on ';'
+    _rest=$NNN_PLUG
+    while [ -n "$_rest" ]; do
+        case "$_rest" in
+            *\;*) _entry=${_rest%%;*}; _rest=${_rest#*;} ;;
+            *)    _entry=$_rest;       _rest='' ;;
+        esac
+        [ -n "$_entry" ] || continue
+        case "$_entry" in
+            *:*) : ;;
+            *)   continue ;;          # not a key:spec pair
+        esac
+        _key=${_entry%%:*}
+        _spec=${_entry#*:}
+        [ -n "$_spec" ] || continue
+
+        # duplicate key detection (first definition wins in nnn)
+        if grep -qx -- "$_key" "$TMPD/seenkeys" 2>/dev/null; then
+            record WARN config "key '$_key'" "duplicate keybind, later definition ignored by nnn"
+            continue
+        fi
+        printf '%s\n' "$_key" >> "$TMPD/seenkeys"
+
+        # strip a single leading '-' (skip-refresh modifier)
+        _spec=${_spec#-}
+        # command-as-plugin binding (starts with '!') -> not a plugin file
+        case "$_spec" in
+            '!'*)
+                record INFO command "key '$_key'" "command binding, not a plugin (skipped)"
+                continue ;;
+        esac
+        # internal/hidden script bound directly
+        case "${_spec##*/}" in
+            .*)
+                record WARN internal "$_spec" "internal/hidden script bound as a plugin"
+                ;;
+        esac
+        if ! grep -qx -- "$_spec" "$TMPD/bound" 2>/dev/null; then
+            printf '%s\n' "$_spec" >> "$TMPD/bound"
+            bound_count=$((bound_count + 1))
+        fi
+    done
+fi
+
+# ---- decide scope -----------------------------------------------------------
+# Default scope is "bound only" when NNN_PLUG defines at least one plugin;
+# otherwise (fresh machine) fall back to scanning everything.
+scan_all=$ALL
+if [ "$bound_count" -eq 0 ]; then
+    scan_all=1
+fi
+
+# checked-name registry to avoid double-checking a bound plugin during the
+# disk sweep
+: > "$TMPD/checked"
+
+mark_checked() { printf '%s\n' "$1" >> "$TMPD/checked"; }
+is_checked()   { grep -qx -- "$1" "$TMPD/checked" 2>/dev/null; }
+
+# 1) always check bound plugins
+if [ "$bound_count" -gt 0 ]; then
+    while IFS= read -r _p; do
+        [ -n "$_p" ] || continue
+        check_plugin "$_p" 1
+        mark_checked "$_p"
+    done < "$TMPD/bound"
+fi
+
+# 2) sweep the directory (dotfiles are skipped by the glob; *.md excluded)
+present_count=0
+unbound_present=0
+for _f in "$PLUGDIR"/*; do
+    [ -f "$_f" ] || continue
+    _bn=${_f##*/}
+    case "$_bn" in
+        *.md) continue ;;
+    esac
+    present_count=$((present_count + 1))
+    if is_checked "$_bn"; then
+        continue
+    fi
+    unbound_present=$((unbound_present + 1))
+    if [ "$scan_all" -eq 1 ]; then
+        check_plugin "$_bn" 0
+        mark_checked "$_bn"
+    fi
+done
+
+# ---- report -----------------------------------------------------------------
+print_section() {
+    # $1 = category key, $2 = colour, $3 = label tag
+    _cat=$1; _col=$2; _tag=$3
+    _any=0
+    # ERR and WARN of this category, then (for ok/optional) the rest
+    while IFS='|' read -r _sev _c _plug _detail; do
+        [ "$_c" = "$_cat" ] || continue
+        case "$_sev" in
+            ERR)  _mark="${C_RED}[FAIL]${C_RST}" ;;
+            WARN) _mark="${C_YEL}[WARN]${C_RST}" ;;
+            INFO) _mark="${C_BLU}[INFO]${C_RST}" ;;
+            OK)   _mark="${C_GRN}[ OK ]${C_RST}" ;;
+            *)    _mark="[????]" ;;
+        esac
+        if [ "$QUIET" -eq 1 ]; then
+            case "$_sev" in OK|INFO) continue ;; esac
+        fi
+        if [ "$_any" -eq 0 ]; then
+            printf '%s%s%s\n' "$_col" "$_tag" "$C_RST"
+            _any=1
+        fi
+        printf '  %s %-22s %s%s%s\n' "$_mark" "$_plug" "$C_DIM" "$_detail" "$C_RST"
+    done < "$RESULTS"
+    [ "$_any" -eq 1 ] && echo ''
+}
+
+n_err=$(grep -c '^ERR|'  "$RESULTS" 2>/dev/null)
+n_warn=$(grep -c '^WARN|' "$RESULTS" 2>/dev/null)
+n_info=$(grep -c '^INFO|' "$RESULTS" 2>/dev/null)
+n_ok=$(grep -c '^OK|'    "$RESULTS" 2>/dev/null)
+
+echo "nnn plugin pre-flight check"
+printf '%sdir%s     %s\n' "$C_DIM" "$C_RST" "$PLUGDIR"
+printf '%splatform%s %s\n' "$C_DIM" "$C_RST" "$OS"
+if [ "$bound_count" -gt 0 ]; then
+    if [ "$scan_all" -eq 1 ]; then
+        printf '%sscope%s    %d bound + all present (%d on disk)\n' \
+            "$C_DIM" "$C_RST" "$bound_count" "$present_count"
+    else
+        printf '%sscope%s    %d bound plugin(s); %d other(s) present, run -a to inspect\n' \
+            "$C_DIM" "$C_RST" "$bound_count" "$unbound_present"
+    fi
+else
+    printf '%sscope%s    NNN_PLUG empty -> all present plugins (%d on disk)\n' \
+        "$C_DIM" "$C_RST" "$present_count"
+fi
+[ "$STRICT" -eq 1 ] && printf '%smode%s     strict\n' "$C_DIM" "$C_RST"
+echo ''
+
+print_section file     "$C_RED" "Missing plugin files"
+print_section dep      "$C_RED" "Missing external dependencies"
+print_section platform "$C_YEL" "Platform incompatible"
+print_section internal "$C_YEL" "Internal scripts bound as plugins"
+print_section config   "$C_YEL" "Keybind configuration"
+print_section optional "$C_BLU" "Optional capabilities not installed"
+print_section command  "$C_BLU" "Command bindings (not plugins)"
+print_section ok       "$C_GRN" "Runnable"
+
+printf '%ssummary%s  ' "$C_DIM" "$C_RST"
+printf '%s%d ok%s, ' "$C_GRN" "$n_ok" "$C_RST"
+printf '%s%d optional/info%s, ' "$C_BLU" "$n_info" "$C_RST"
+printf '%s%d warning(s)%s, ' "$C_YEL" "$n_warn" "$C_RST"
+printf '%s%d error(s)%s\n' "$C_RED" "$n_err" "$C_RST"
+
+if [ "$n_err" -gt 0 ]; then
+    printf '%sresult: FAIL%s (%d hard error(s))\n' "$C_RED" "$C_RST" "$n_err"
+    exit 1
+fi
+printf '%sresult: OK%s\n' "$C_GRN" "$C_RST"
+exit 0

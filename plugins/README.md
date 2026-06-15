@@ -55,6 +55,7 @@ Plugins extend the capabilities of `nnn`. They are _executable_ scripts (or bina
 | [openall](openall) | Open selected files together or one by one [✓] | bash | - |
 | [organize](organize) | Auto-organize files in directories by file type [✓] | sh | file |
 | [pdfread](pdfread) | Read a PDF or text file aloud | sh | pdftotext, mpv,<br>pico2wave |
+| [plugcheck](plugcheck) | Pre-flight check of configured plugins (deps/platform/optional) | sh | awk, sed, grep,<br>mktemp |
 | [preview-tabbed](preview-tabbed) | Preview files with Tabbed/xembed | bash | _see in-file docs_ |
 | [preview-tui](preview-tui) | Preview with Tmux/kitty/[QuickLook](https://github.com/QL-Win/QuickLook)/xterm/`$TERMINAL` | sh | _see in-file docs_ |
 | [pskill](pskill) | Fuzzy list by name and kill process or zombie | sh | fzf, ps, sudo/doas |
@@ -75,12 +76,14 @@ Notes:
 
 1. A plugin has to explicitly request `nnn` to clear the selection e.g. after operating on the selected files.
 2. Files starting with a dot in the `plugins` directory are internal files and should not be used as plugins.
+3. Run [`plugcheck`](plugcheck) to see which of these plugins can actually run on your machine — see [Pre-flight plugin check](#pre-flight-plugin-check).
 
 ### Table of contents
 
 - [Installation](#installation)
 - [Configuration](#configuration)
   - [Skip directory refresh after running a plugin](#skip-directory-refresh-after-running-a-plugin--)
+- [Pre-flight plugin check](#pre-flight-plugin-check)
 - [Running commands as plugin](#running-commands-as-plugin-)
   - [Skip user confirmation after command execution](#skip-user-confirmation-after-command-execution-)
   - [Run a GUI app as plugin](#run-a-gui-app-as-plugin-)
@@ -143,6 +146,70 @@ Note:
 ```sh
 export NNN_PLUG='p:-plugin'
 ```
+
+## Pre-flight plugin check
+
+Before provisioning a new machine (or in CI), run the [`plugcheck`](plugcheck) plugin to verify that the plugins you actually use can run on the host. It reads each plugin's own `# Dependencies:` header — the single source of truth — so you never have to cross-check the table above by hand, and it sorts every finding into one of four clear buckets:
+
+| Tag | Meaning |
+|---|---|
+| `[FAIL]` | the plugin file is missing or not executable |
+| `[FAIL]` | a required external command is not installed |
+| `[WARN]` | the plugin cannot run on this platform (e.g. a macOS-only plugin on Linux) |
+| `[INFO]` | an _optional_ capability is not installed (never a failure) |
+
+By default it inspects only the plugins bound in `$NNN_PLUG`; when `$NNN_PLUG` is empty (a freshly provisioned machine) it inspects every plugin present on disk. Bindings of commands (`!`) and internal dotfiles, custom sub-folders and duplicate keybinds are all reported too.
+
+#### Run it as a plugin
+
+Assign a key in `$NNN_PLUG` and trigger it with the plugin shortcut (<kbd>;</kbd>):
+
+```sh
+export NNN_PLUG='c:plugcheck'
+```
+
+Now <kbd>;c</kbd> (or <kbd>Alt+c</kbd>) shows the report.
+
+#### Run it from the shell (CI / batch provisioning)
+
+`plugcheck` is just an executable script, so it runs fine outside `nnn` — straight from a cloned repo _before_ installing anything:
+
+```sh
+# inspect everything that would be installed
+plugins/plugcheck
+
+# only the plugins you have configured, and fail on any hard error
+NNN_PLUG='f:finder;o:fzopen;p:preview-tui' plugins/plugcheck
+
+# inspect every installed plugin, treating any problem as an error
+~/.config/nnn/plugins/plugcheck --all --strict
+```
+
+It is fully non-interactive and exits `0` when there are no hard errors, `1` when at least one plugin is unusable (missing file, missing required dependency, or bound to an incompatible platform), and `2` on bad usage. Optional-only findings never change a passing result, so purely informational notes don't turn the whole report red. Colour is auto-disabled when the output is not a terminal or when `NO_COLOR` is set.
+
+| Flag | Effect |
+|---|---|
+| `-a`, `--all` | check every plugin on disk, not only those bound in `$NNN_PLUG` |
+| `-s`, `--strict` | treat problems on present-but-unbound plugins as errors too |
+| `-q`, `--quiet` | print only problems and the summary |
+| `-n`, `--no-color` | disable ANSI colour |
+| `-p`, `--plugin-dir DIR` | check the plugins in `DIR` |
+
+#### Declaring dependencies so `plugcheck` can read them
+
+To keep dependency information in one place, `plugcheck` parses the `# Dependencies:` line of each plugin rather than a separate list. Write it as a comma-separated list of the commands the plugin needs, using `/` or the word `or` for interchangeable alternatives and parentheses for notes:
+
+```sh
+# Dependencies: fzf, fd/find, xdg-open or open (macOS)
+```
+
+- Each comma-separated item is a command that must be present.
+- `a/b` (or `a or b`) means _either_ command satisfies that item.
+- A parenthetical containing the word `optional` marks the item optional — a missing optional command is reported as `[INFO]`, not a failure.
+- A parenthetical naming a different OS (e.g. `(macOS)`) downgrades a missing command to a platform note instead of a hard error.
+- A plugin that only runs on one OS can declare it with an `# OS:` header (e.g. `# OS: macOS`); the `*-mac` filename suffix is also recognised.
+
+Common GNU-on-macOS names (`gsed`, `gsort`, …) resolve to their plain counterparts, so a `gsed` dependency is satisfied by `sed` on Linux.
 
 ## Running commands as plugin [`!`]
 
@@ -390,7 +457,7 @@ fi
 
 ## Contributing plugins
 
-1. Add informative sections like _Description_, _Notes_, _Dependencies_, _Shell_, _Author_ etc. in the plugin.
+1. Add informative sections like _Description_, _Notes_, _Dependencies_, _Shell_, _Author_ etc. in the plugin. Keep the _Dependencies_ line machine-readable (see [Declaring dependencies](#declaring-dependencies-so-plugcheck-can-read-them)) so [`plugcheck`](plugcheck) can validate it.
 2. Add an entry in the table above. Note that the list is alphabetically ordered by plugin name.
 3. Keep non-portable commands (like `notify-send`) commented so users from any other OS/DE aren't surprised.
 4. The plugin file should be executable.
